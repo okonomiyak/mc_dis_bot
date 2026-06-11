@@ -1,2 +1,2 @@
 #!/bin/bash
-mcrcon -H localhost -P 25577 -p null "say $1"
+mcrcon -H host.docker.internal -P 25576 -p null "say $1"

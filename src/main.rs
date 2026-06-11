@@ -27,6 +27,7 @@ async fn say(
                     .current_dir(x)
                     .output()
                     .expect("failed to execute process");
+                ctx.say("OK").await?;
             },
         Err(_) => {
             ctx.say("だめでした").await?;
@@ -47,6 +48,7 @@ async fn other_comand(
                     .current_dir(x)
                     .output()
                     .expect("failed to execute process");
+                ctx.say("OK").await?;
             },
         Err(_) => {
             ctx.say("だめでした").await?;
@@ -79,7 +81,7 @@ async fn main() {
 
             let http = ctx.http.clone();
             tokio::spawn(async move{
-                let mut log_line = 0;
+                let mut log_line = std::fs::read_to_string(&path).expect("NO file").lines().count();
                 loop{
                     let contents = std::fs::read_to_string(&path).expect("NO file");
                     let lines :Vec<&str> = contents.lines().collect();
