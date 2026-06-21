@@ -76,10 +76,21 @@ async fn main() {
     let channel_id_str = std::env::var("CHANNEL_ID").expect("missing CHANNEL_ID");
     let channel_id = serenity::ChannelId::new(channel_id_str.parse().expect("invalid CHANNEL_ID"));
 
-    let re = Regex::new(r"MinecraftServer/\]: (<.+>.+|.+ (?:joined|left) the game|Stopping (?:the )?server)").unwrap();
-    let re1 = Regex::new(r"\[Not Secure\] \[Rcon\] (.+)").unwrap();
-    let re2 = Regex::new(r"Dedicated server took ([\d.]+) seconds to load").unwrap();
+    let re_chat   = Regex::new(r"MinecraftServer/\]: (<.+>.+|.+ (?:joined|left) the game)").unwrap();
+    let re_rcon   = Regex::new(r"\[Not Secure\] \[Rcon\] (.+)").unwrap();
+    let re_start  = Regex::new(r"Dedicated server took ([\d.]+) seconds to load").unwrap();
+    let re_stop   = Regex::new(r"Stopping (?:the )?server").unwrap();
+    let re_death  = Regex::new(r"MinecraftServer/\]: (.+ (?:died|was slain|fell|drowned|burned|blew up).*)").unwrap();
 
+    let patterns: Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)> = vec![
+        (re_rcon,  Box::new(|cap: &str| cap.to_string())),
+        (re_start, Box::new(|cap: &str| format!("サーバー起動完了({cap}秒)"))),
+        (re_stop,  Box::new(|_| "サーバー終了".to_string())),
+        (re_death, Box::new(|cap: &str| cap.to_string())),
+        (re_chat,  Box::new(|cap: &str| cap.to_string())),
+    ];
+
+    
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![pong()],
@@ -102,24 +113,22 @@ async fn main() {
                         }
                     };
                     let lines :Vec<&str> = contents.lines().collect();
-                    eprintln!("DEBUG: lines={}, log_line={}", lines.len(), log_line); // ← 追加
 
                     if lines.len() < log_line {
                         log_line = 0;
                     }
-
                     for message in &lines[log_line..] {
-                        if let Some(caps) = re1.captures(&message) {
-                            channel_id.say(&http, &caps[1]).await.unwrap();
-                        }
-                        else if let Some(caps) = re.captures(&message) {
-                            channel_id.say(&http, &caps[1]).await.unwrap();
-                        }
-                        else if let Some(caps) = re2.captures(&message) {
-                            channel_id.say(&http, format!("サーバー起動完了({}秒)", &caps[1])).await.unwrap();
+                        let result = patterns.iter().find_map(|(re, formatter)| {
+                            re.captures(message).map(|caps| {
+                                let captured = caps.get(1).map_or("", |m| m.as_str());
+                                formatter(captured)
+                            })
+                        });
+
+                        if let Some(text) = result {
+                            channel_id.say(&http, text).await.unwrap();
                         }
                     }
-
                     log_line = lines.len();
                     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                 }
