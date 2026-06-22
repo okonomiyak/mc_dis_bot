@@ -1,42 +1,19 @@
+mod commands;
+
 use poise::serenity_prelude::{self as serenity};
 use regex::Regex;
-use std::process::Command;
-struct Data {
+
+pub struct Data {
     channel_id: serenity::ChannelId,
 }
-type Error = Box<dyn std::error::Error + Send + Sync>;
-type Context<'a> = poise::Context<'a, Data, Error>;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Context<'a> = poise::Context<'a, Data, Error>;
 
+use commands::{list, pong};
 
 /// Displays your or another user's account creation date
-#[poise::command(slash_command, prefix_command)]
-async fn pong(
-    ctx: Context<'_>,
-) -> Result<(), Error> {
-    ctx.say("MinecraftサーバーのログをDiscordに転送し、コマンドでサーバーに指示を送れるbot").await?;
-    Ok(())
-}
-#[poise::command(slash_command)]
-async fn say(
-    ctx: Context<'_>,
-    #[description = "メッセージ"] text: String,   
-)-> Result<(),Error> {
-    match std::env::current_dir() { // カレントディレクトリを取得
-        Ok(x) => 
-            {
-                Command::new("./user.sh")
-                    .arg(&text)
-                    .current_dir(x)
-                    .output()
-                    .expect("failed to execute process");
-                ctx.say("OK").await?;
-            },
-        Err(_) => {
-            ctx.say("だめでした").await?;
-        },
-    }
-    Ok(())
-}
+
+
 
 async fn event_handler(
     _ctx: &serenity::Context,
@@ -93,7 +70,7 @@ async fn main() {
     
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![pong()],
+            commands: vec![pong(), list()],
             event_handler: |ctx, event, framework, data| {
                 Box::pin(event_handler(ctx, event, framework, data))
             },
