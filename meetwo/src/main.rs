@@ -58,16 +58,17 @@ async fn main() {
     let re_start  = Regex::new(r"Dedicated server took ([\d.]+) seconds to load").unwrap();
     let re_stop   = Regex::new(r"Stopping (?:the )?server").unwrap();
     let re_death  = Regex::new(r"MinecraftServer/\]: (.+ (?:died|was slain|fell|drowned|burned|blew up).*)").unwrap();
+    let re_advancement = Regex::new(r"MinecraftServer/\]: (.+ has (?:made the advancement|reached the goal|completed the challenge) \[.+\])").unwrap();
 
     let patterns: Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)> = vec![
         (re_rcon,  Box::new(|cap: &str| cap.to_string())),
         (re_start, Box::new(|cap: &str| format!("サーバー起動完了({cap}秒)"))),
         (re_stop,  Box::new(|_| "サーバー終了".to_string())),
+        (re_advancement, Box::new(|cap: &str| format!("実績解除:{cap}"))),
         (re_death, Box::new(|cap: &str| cap.to_string())),
         (re_chat,  Box::new(|cap: &str| cap.to_string())),
     ];
 
-    
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![pong(), list()],
