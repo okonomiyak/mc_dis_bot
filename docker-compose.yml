@@ -14,7 +14,8 @@ services:
         - "host.docker.internal:host-gateway"
       build: ./meetwo
       volumes:
-        - /home/iwa/mc_server/meetwos/create/logs:/app/logs:ro
+        - /home/iwa/mc_server/meetwos/create/logs:/app/logs_create:ro
+        - /home/iwa/mc_server/meetwos/sky_greg/logs:/app/logs_sky_greg:ro
       env_file:
         - ./meetwo/.env
       restart: unless-stopped
