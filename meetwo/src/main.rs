@@ -1,10 +1,13 @@
 mod commands;
 
+use std::sync::Arc;
+
 use poise::serenity_prelude::{self as serenity};
 use regex::Regex;
 
 pub struct Data {
-    channel_id: serenity::ChannelId,
+    channel_id_1: serenity::ChannelId,
+    channel_id_2: serenity::ChannelId,
 }
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
@@ -12,6 +15,43 @@ pub type Context<'a> = poise::Context<'a, Data, Error>;
 use commands::{list, pong};
 
 /// Displays your or another user's account creation date
+async fn write_discord(
+    path: String,
+    patterns: Arc<Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)>>,
+    channel_id: serenity::ChannelId,
+    http: Arc<serenity::Http>,
+) {    tokio::spawn(async move {
+    let mut log_line = std::fs::read_to_string(&path).expect("NO file").lines().count();
+    loop{
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                continue; // 読めなかったら今回はスキップして次のループへ
+            }
+        };
+        let lines :Vec<&str> = contents.lines().collect();
+
+        if lines.len() < log_line {
+            log_line = 0;
+        }
+        for message in &lines[log_line..] {
+            let result = patterns.iter().find_map(|(re, formatter)| {
+                re.captures(message).map(|caps| {
+                    let captured = caps.get(1).map_or("", |m| m.as_str());
+                    formatter(captured)
+                })
+            });
+
+            if let Some(text) = result {
+                channel_id.say(&http, text).await.unwrap();
+            }
+        }
+        log_line = lines.len();
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    }
+    });
+}
 
 
 
@@ -25,13 +65,22 @@ async fn event_handler(
         if new_message.author.bot {
             return Ok(());
         }
-        if new_message.channel_id == data.channel_id {
+
+        let script = if new_message.channel_id == data.channel_id_1 {
+            Some("./user_f.sh")
+        } else if new_message.channel_id == data.channel_id_2 {
+            Some("./user_s.sh")
+        } else {
+            None
+        };
+
+        if let Some(script) = script {
             let user = new_message.author.name.clone();
             let message = format!("{user}: {}", new_message.content);
-            eprintln!("DEBUG: passing to user.sh -> {:?}", message); 
+            eprintln!("DEBUG: passing to {script} -> {:?}", message);
 
             let current_dir = std::env::current_dir()?;
-            std::process::Command::new("./user.sh")
+            std::process::Command::new(script)
                 .arg(message)
                 .current_dir(current_dir)
                 .output()?;
@@ -43,15 +92,24 @@ async fn event_handler(
 #[tokio::main]
 async fn main() {
     dotenvy::from_filename(".env").ok();
+
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN");
 
-    let path = std::env::var("LOG_PATH").expect("missing LOG_PATH");
+    let paths: [String; 2] = [
+        std::env::var("LOG_PATH_1").expect("missing 1LOG_PATH"),
+        std::env::var("LOG_PATH_2").expect("missing 2LOG_PATH"),
+    ];
 
     let intents = serenity::GatewayIntents::non_privileged()
     | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let channel_id_str = std::env::var("CHANNEL_ID").expect("missing CHANNEL_ID");
-    let channel_id = serenity::ChannelId::new(channel_id_str.parse().expect("invalid CHANNEL_ID"));
+    let channel_id_str:[String;2] = [
+        std::env::var("CHANNEL_ID_1").expect("missing 1CHANNEL_ID"),
+        std::env::var("CHANNEL_ID_2").expect("missing 2CHANNEL_ID"),
+    ];
+
+    let channel_id_1 = serenity::ChannelId::new(channel_id_str[0].parse().expect("invalid CHANNEL_ID"));
+    let channel_id_2 = serenity::ChannelId::new(channel_id_str[1].parse().expect("invalid CHANNEL_ID"));
 
     let re_chat   = Regex::new(r"MinecraftServer/\]: (<.+>.+|.+ (?:joined|left) the game)").unwrap();
     let re_rcon   = Regex::new(r"\[Not Secure\] \[Rcon\] (.+)").unwrap();
@@ -68,6 +126,7 @@ async fn main() {
         (re_death, Box::new(|cap: &str| cap.to_string())),
         (re_chat,  Box::new(|cap: &str| cap.to_string())),
     ];
+    let patterns = Arc::new(patterns);
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -80,46 +139,17 @@ async fn main() {
         .setup(move |ctx, _ready, framework| {
 
             let http = ctx.http.clone();
-            tokio::spawn(async move{
-                let mut log_line = std::fs::read_to_string(&path).expect("NO file").lines().count();
-                loop{
-                    let contents = match std::fs::read_to_string(&path) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                            continue; // 読めなかったら今回はスキップして次のループへ
-                        }
-                    };
-                    let lines :Vec<&str> = contents.lines().collect();
-
-                    if lines.len() < log_line {
-                        log_line = 0;
-                    }
-                    for message in &lines[log_line..] {
-                        let result = patterns.iter().find_map(|(re, formatter)| {
-                            re.captures(message).map(|caps| {
-                                let captured = caps.get(1).map_or("", |m| m.as_str());
-                                formatter(captured)
-                            })
-                        });
-
-                        if let Some(text) = result {
-                            channel_id.say(&http, text).await.unwrap();
-                        }
-                    }
-                    log_line = lines.len();
-                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                }
-            });
 
             Box::pin(async move {
+                write_discord(paths[0].clone(), patterns.clone(), channel_id_1, http.clone()).await;
+                write_discord(paths[1].clone(), patterns, channel_id_2, http).await;
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 //Poise::builtins::register_in_guild(
                 //    ctx,
                 //    &framework.options().commands,
                 //    serenity::GuildId::new(SERVER),
                 //).await?;
-                Ok(Data { channel_id })
+                Ok(Data { channel_id_1, channel_id_2})
             })
         })
         .build();
