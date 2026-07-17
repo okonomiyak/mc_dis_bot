@@ -1,59 +1,99 @@
 mod commands;
+mod rcon;
+mod server_config;
 
 use std::sync::Arc;
 
 use poise::serenity_prelude::{self as serenity};
 use regex::Regex;
 
+use server_config::ServerConfig;
+
 pub struct Data {
-    channel_id_1: serenity::ChannelId,
-    channel_id_2: serenity::ChannelId,
+    servers: Arc<Vec<ServerConfig>>,
 }
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
-use commands::{list, pong};
+use commands::{list, pong, status};
 
-/// Displays your or another user's account creation date
+type LogPatterns = Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)>;
+
+/// ログファイルの追記分だけを監視してDiscordに転送する
 async fn write_discord(
-    path: String,
-    patterns: Arc<Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)>>,
-    channel_id: serenity::ChannelId,
+    server: ServerConfig,
+    patterns: Arc<LogPatterns>,
     http: Arc<serenity::Http>,
-) {    tokio::spawn(async move {
-    let mut log_line = std::fs::read_to_string(&path).expect("NO file").lines().count();
-    loop{
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                continue; // 読めなかったら今回はスキップして次のループへ
-            }
-        };
-        let lines :Vec<&str> = contents.lines().collect();
+) {
+    tokio::spawn(async move {
+        use std::io::{Read, Seek, SeekFrom};
 
-        if lines.len() < log_line {
-            log_line = 0;
-        }
-        for message in &lines[log_line..] {
-            let result = patterns.iter().find_map(|(re, formatter)| {
-                re.captures(message).map(|caps| {
-                    let captured = caps.get(1).map_or("", |m| m.as_str());
-                    formatter(captured)
-                })
-            });
+        let path = server.log_path;
+        let channel_id = server.channel_id;
 
-            if let Some(text) = result {
-                channel_id.say(&http, text).await.unwrap();
+        let mut offset: u64 = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let mut partial_line = String::new();
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+            let mut file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue, // 読めなかったら今回はスキップして次のループへ
+            };
+
+            let len = match file.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+
+            if len < offset {
+                // ログローテーション等でファイルが縮小した場合は最初から読み直す
+                offset = 0;
+                partial_line.clear();
+            }
+
+            if len == offset {
+                continue; // 追記なし
+            }
+
+            if file.seek(SeekFrom::Start(offset)).is_err() {
+                continue;
+            }
+
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_err() {
+                continue;
+            }
+            offset = len;
+
+            partial_line.push_str(&buf);
+            let ends_with_newline = partial_line.ends_with('\n');
+            let mut lines: Vec<String> = partial_line.lines().map(String::from).collect();
+            // 改行で終わっていない最後の行は、次の書き込みで完成するまで持ち越す
+            partial_line = if ends_with_newline {
+                String::new()
+            } else {
+                lines.pop().unwrap_or_default()
+            };
+
+            for message in &lines {
+                let result = patterns.iter().find_map(|(re, formatter)| {
+                    re.captures(message).map(|caps| {
+                        let captured = caps.get(1).map_or("", |m| m.as_str());
+                        formatter(captured)
+                    })
+                });
+
+                if let Some(text) = result
+                    && let Err(e) = channel_id.say(&http, text).await
+                {
+                    eprintln!("ERROR: Discordへの送信に失敗しました: {e}");
+                }
             }
         }
-        log_line = lines.len();
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-    }
     });
 }
-
-
 
 async fn event_handler(
     _ctx: &serenity::Context,
@@ -66,24 +106,20 @@ async fn event_handler(
             return Ok(());
         }
 
-        let script = if new_message.channel_id == data.channel_id_1 {
-            Some("./user_f.sh")
-        } else if new_message.channel_id == data.channel_id_2 {
-            Some("./user_s.sh")
-        } else {
-            None
+        let Some(server) = data
+            .servers
+            .iter()
+            .find(|s| s.channel_id == new_message.channel_id)
+        else {
+            return Ok(());
         };
 
-        if let Some(script) = script {
-            let user = new_message.author.name.clone();
-            let message = format!("{user}: {}", new_message.content);
-            eprintln!("DEBUG: passing to {script} -> {:?}", message);
+        let user = new_message.author.name.clone();
+        let message = format!("say {user}: {}", new_message.content);
+        eprintln!("DEBUG: sending to {} -> {:?}", server.name, message);
 
-            let current_dir = std::env::current_dir()?;
-            std::process::Command::new(script)
-                .arg(message)
-                .current_dir(current_dir)
-                .output()?;
+        if let Err(e) = rcon::run(server, &message).await {
+            eprintln!("ERROR: rcon送信に失敗しました({}): {e}", server.name);
         }
     }
     Ok(())
@@ -95,67 +131,53 @@ async fn main() {
 
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN");
 
-    let paths: [String; 2] = [
-        std::env::var("LOG_PATH_1").expect("missing 1LOG_PATH"),
-        std::env::var("LOG_PATH_2").expect("missing 2LOG_PATH"),
-    ];
+    let intents = serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let intents = serenity::GatewayIntents::non_privileged()
-    | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let servers = ServerConfig::load_all_from_env().expect("failed to load server config from env");
 
-    let channel_id_str:[String;2] = [
-        std::env::var("CHANNEL_ID_1").expect("missing 1CHANNEL_ID"),
-        std::env::var("CHANNEL_ID_2").expect("missing 2CHANNEL_ID"),
-    ];
+    let re_chat = Regex::new(r"MinecraftServer/\]: (<.+>.+|.+ (?:joined|left) the game)").unwrap();
+    let re_rcon = Regex::new(r"\[Not Secure\] \[Rcon\] (.+)").unwrap();
+    let re_start = Regex::new(r"Dedicated server took ([\d.]+) seconds to load").unwrap();
+    let re_stop = Regex::new(r"Stopping (?:the )?server").unwrap();
+    let re_death =
+        Regex::new(r"MinecraftServer/\]: (.+ (?:died|was slain|fell|drowned|burned|blew up).*)").unwrap();
+    let re_advancement = Regex::new(
+        r"MinecraftServer/\]: (.+ has (?:made the advancement|reached the goal|completed the challenge) \[.+\])",
+    )
+    .unwrap();
 
-    let channel_id_1 = serenity::ChannelId::new(channel_id_str[0].parse().expect("invalid CHANNEL_ID"));
-    let channel_id_2 = serenity::ChannelId::new(channel_id_str[1].parse().expect("invalid CHANNEL_ID"));
-
-    let re_chat   = Regex::new(r"MinecraftServer/\]: (<.+>.+|.+ (?:joined|left) the game)").unwrap();
-    let re_rcon   = Regex::new(r"\[Not Secure\] \[Rcon\] (.+)").unwrap();
-    let re_start  = Regex::new(r"Dedicated server took ([\d.]+) seconds to load").unwrap();
-    let re_stop   = Regex::new(r"Stopping (?:the )?server").unwrap();
-    let re_death  = Regex::new(r"MinecraftServer/\]: (.+ (?:died|was slain|fell|drowned|burned|blew up).*)").unwrap();
-    let re_advancement = Regex::new(r"MinecraftServer/\]: (.+ has (?:made the advancement|reached the goal|completed the challenge) \[.+\])").unwrap();
-
-    let patterns: Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)> = vec![
-        (re_rcon,  Box::new(|cap: &str| cap.to_string())),
+    let patterns: LogPatterns = vec![
+        (re_rcon, Box::new(|cap: &str| cap.to_string())),
         (re_start, Box::new(|cap: &str| format!("サーバー起動完了({cap}秒)"))),
-        (re_stop,  Box::new(|_| "サーバー終了".to_string())),
+        (re_stop, Box::new(|_| "サーバー終了".to_string())),
         (re_advancement, Box::new(|cap: &str| format!("実績解除:{cap}"))),
         (re_death, Box::new(|cap: &str| cap.to_string())),
-        (re_chat,  Box::new(|cap: &str| cap.to_string())),
+        (re_chat, Box::new(|cap: &str| cap.to_string())),
     ];
     let patterns = Arc::new(patterns);
 
+    let servers_for_setup = servers.clone();
+    let servers = Arc::new(servers);
+
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![pong(), list()],
-            event_handler: |ctx, event, framework, data| {
-                Box::pin(event_handler(ctx, event, framework, data))
-            },
+            commands: vec![pong(), list(), status()],
+            event_handler: |ctx, event, framework, data| Box::pin(event_handler(ctx, event, framework, data)),
             ..Default::default()
         })
         .setup(move |ctx, _ready, framework| {
-
             let http = ctx.http.clone();
 
             Box::pin(async move {
-                write_discord(paths[0].clone(), patterns.clone(), channel_id_1, http.clone()).await;
-                write_discord(paths[1].clone(), patterns, channel_id_2, http).await;
+                for server in servers_for_setup {
+                    write_discord(server, patterns.clone(), http.clone()).await;
+                }
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                //Poise::builtins::register_in_guild(
-                //    ctx,
-                //    &framework.options().commands,
-                //    serenity::GuildId::new(SERVER),
-                //).await?;
-                Ok(Data { channel_id_1, channel_id_2})
+                Ok(Data { servers })
             })
         })
         .build();
 
-    let client = serenity::ClientBuilder::new(token, intents)
-        .framework(framework)
-        .await;
+    let client = serenity::ClientBuilder::new(token, intents).framework(framework).await;
     client.unwrap().start().await.unwrap();
 }

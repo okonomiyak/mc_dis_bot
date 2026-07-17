@@ -1,23 +1,20 @@
-use crate::{Context, Error};
-use std::process::Command;
+use crate::{rcon, Context, Error};
 
 #[poise::command(slash_command)]
-pub async fn list(
-    ctx: Context<'_>,
-)-> Result<(),Error> {
-    match std::env::current_dir() { // カレントディレクトリを取得
-        Ok(x) => 
-            {
-                Command::new("./user.sh")
-                    .arg("list")
-                    .current_dir(x)
-                    .output()
-                    .expect("failed to execute process");
-                ctx.say("OK").await?;
-            },
-        Err(_) => {
-            ctx.say("だめでした").await?;
-        },
-    }
+pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(server) = ctx
+        .data()
+        .servers
+        .iter()
+        .find(|s| s.channel_id == ctx.channel_id())
+    else {
+        ctx.say("このチャンネルに紐づいたサーバーが見つかりません").await?;
+        return Ok(());
+    };
+
+    match rcon::run(server, "list").await {
+        Ok(output) => ctx.say(output).await?,
+        Err(e) => ctx.say(format!("だめでした: {e}")).await?,
+    };
     Ok(())
 }
