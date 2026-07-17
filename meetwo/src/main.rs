@@ -15,7 +15,7 @@ pub struct Data {
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
-use commands::{list, pong, status};
+use commands::{list, pong, status, stop};
 
 type LogPatterns = Vec<(Regex, Box<dyn Fn(&str) -> String + Send + Sync>)>;
 
@@ -161,7 +161,7 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![pong(), list(), status()],
+            commands: vec![pong(), list(), status(), stop()],
             event_handler: |ctx, event, framework, data| Box::pin(event_handler(ctx, event, framework, data)),
             ..Default::default()
         })
