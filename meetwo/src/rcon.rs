@@ -1,5 +1,11 @@
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 use crate::server_config::ServerConfig;
 use crate::Error;
+
+static ANSI_ESCAPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap());
 
 /// 指定したサーバーに対して mcrcon で任意のコマンドを実行し、標準出力を返す
 pub async fn run(server: &ServerConfig, command: &str) -> Result<String, Error> {
@@ -23,5 +29,6 @@ pub async fn run(server: &ServerConfig, command: &str) -> Result<String, Error> 
         .into());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let raw = String::from_utf8_lossy(&output.stdout);
+    Ok(ANSI_ESCAPE.replace_all(raw.trim(), "").to_string())
 }

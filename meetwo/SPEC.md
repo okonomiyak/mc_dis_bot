@@ -163,7 +163,7 @@ async fn run(server: &ServerConfig, command: &str) -> Result<String, Error>
 ```
 
 - `mcrcon -H <host> -P <port> -p <password> "<command>"` を`tokio::process::Command`で非同期実行する(bot本体のイベントループをブロックしない)。
-- 標準出力をUTF-8として読み取り、前後の空白を除去して返す。
+- 標準出力をUTF-8として読み取り、前後の空白を除去したうえで、mcrconが付与するANSIエスケープシーケンス(色・リセットコード等)を正規表現で除去して返す。
 - プロセスの終了コードが非ゼロの場合はエラーとして返す(標準エラー出力の内容を含む)。
 
 ## 7. デプロイ
