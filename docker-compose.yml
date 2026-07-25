@@ -1,19 +1,31 @@
 services:
-  mc_dis_bot:
+  # mc_dis_bot:
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   build: .
+  #   env_file:
+  #     - .env
+  #   restart: unless-stopped
+  #   # volumes:
+  #   #   - /path/to/logs/latest.log:/app/latest.log:ro
+
+  mc_dis_bot_meetwo:
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+      build: ./meetwo
+      volumes:
+        - /home/iwa/mc_server/meetwos/create/logs:/app/logs_create:ro
+        - /home/iwa/mc_server/meetwos/sky_greg/logs:/app/logs_sky_greg:ro
+      env_file:
+        - ./meetwo/.env
+      restart: unless-stopped
+
+  mc_dis_bot_test:
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    build: .
-    volumes:
-      - /home/iwa/mc_server/aero/logs/latest.log:/app/latest.log:ro
+    build: ./test
     env_file:
-      - .env
+      - ./test/.env
     restart: unless-stopped
-  mc_dis_bot_2_Meetwo:
-    build: .
-    volumes:
-      - /home/iwa/mc_server/meetwo/logs/latest.log:/app/latest.log:ro
-    env_file:
-      - .env1
-    restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # volumes:
+    #   - /path/to/logs/latest.log:/app/latest.log:ro
