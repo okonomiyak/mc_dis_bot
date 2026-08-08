@@ -156,13 +156,19 @@ async fn main() {
             re_chat,
             Box::new(|cap: &str| {
                 // チャットメッセージ `<user> msg` は `user`:msg 形式に変換する。
-                // 参加/退出通知はそのまま表示する。
                 if let Some(rest) = cap.strip_prefix('<')
                     && let Some(idx) = rest.find('>')
                 {
                     let user = &rest[..idx];
                     let message = rest[idx + 1..].trim_start();
                     return format!("`{user}`:{message}");
+                }
+                // 参加/退出通知は `user`が入室/退出しました。 に変換する。
+                if let Some(user) = cap.strip_suffix(" joined the game") {
+                    return format!("`{user}`が入室しました。");
+                }
+                if let Some(user) = cap.strip_suffix(" left the game") {
+                    return format!("`{user}`が退出しました。");
                 }
                 cap.to_string()
             }),
