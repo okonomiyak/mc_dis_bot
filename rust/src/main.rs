@@ -115,7 +115,11 @@ async fn event_handler(
         };
 
         let user = new_message.author.name.clone();
-        let message = format!("say {user}: {}", new_message.content);
+        let body = serde_json::json!([
+            { "text": "[Discord] ", "color": "aqua" },
+            { "text": format!("{user}: {}", new_message.content) },
+        ]);
+        let message = format!("tellraw @a {body}");
         eprintln!("DEBUG: sending to {} -> {:?}", server.name, message);
 
         if let Err(e) = rcon::run(server, &message).await {
