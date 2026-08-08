@@ -152,7 +152,21 @@ async fn main() {
         (re_stop, Box::new(|_| "サーバー終了".to_string())),
         (re_advancement, Box::new(|cap: &str| format!("実績解除:{cap}"))),
         (re_death, Box::new(|cap: &str| cap.to_string())),
-        (re_chat, Box::new(|cap: &str| cap.to_string())),
+        (
+            re_chat,
+            Box::new(|cap: &str| {
+                // チャットメッセージ `<user> msg` は `user`:msg 形式に変換する。
+                // 参加/退出通知はそのまま表示する。
+                if let Some(rest) = cap.strip_prefix('<')
+                    && let Some(idx) = rest.find('>')
+                {
+                    let user = &rest[..idx];
+                    let message = rest[idx + 1..].trim_start();
+                    return format!("`{user}`:{message}");
+                }
+                cap.to_string()
+            }),
+        ),
     ];
     let patterns = Arc::new(patterns);
 
